@@ -1,3 +1,4 @@
+# filepath: c:\Users\yuzup\source\repos\LLMpg\enhanced-research-agent\src\agent\core.py
 # filepath: c:\Users\yuzup\source\repos\llmdev\enhanced-research-agent\src\agent\core.py
 """
 Core agent functionality for the research agent with enhanced logging
@@ -13,6 +14,7 @@ from src.agent.utils import get_text_response, get_function_call, parse_plan_fro
 from src.agent.planning import PlanManager
 from src.agent.web import WebUtils
 from src.agent.reflection import ReflectionEvaluator
+from src.agent.model_manager import ModelManager
 from src.logger.agent_logger import setup_logger
 from src.logger.interaction_logger import (
     log_user_query, log_agent_response, log_function_call, log_function_result,
@@ -26,52 +28,6 @@ logger = setup_logger(logger_name="agent_core")
 
 class ResearchAgent:
     """Core research agent with LLM interaction capabilities"""
-    
-# Replace the send_message method with our retry-enabled version
-    def send_message_with_retry(self, message):
-        """
-        Send a message to the LLM with retry logic for handling API errors.
-        
-        Args:
-            message: The message to send to the LLM
-            
-        Returns:
-            The LLM response
-            
-        Raises:
-            Exception: If all retries fail
-        """
-        retry_count = 0
-        last_exception = None
-        
-        while retry_count <= self.max_retries:
-            try:
-                logger.debug(f"Sending message to LLM (Attempt {retry_count + 1}/{self.max_retries + 1})")
-                response = self.chat.send_message(message)
-                return response
-                
-            except Exception as e:
-                last_exception = e
-                retry_count += 1
-                
-                # Check if it's a MALFORMED_FUNCTION_CALL error
-                if "MALFORMED_FUNCTION_CALL" in str(e):
-                    logger.warning(f"Detected MALFORMED_FUNCTION_CALL error. Retrying ({retry_count}/{self.max_retries})...")
-                    if retry_count <= self.max_retries:
-                        import time
-                        time.sleep(self.retry_delay)  # Small delay before retrying
-                        continue
-                else:
-                    # For other errors, log and retry as well
-                    logger.warning(f"LLM API error: {str(e)}. Retrying ({retry_count}/{self.max_retries})...")
-                    if retry_count <= self.max_retries:
-                        import time
-                        time.sleep(self.retry_delay)  # Small delay before retrying
-                        continue
-        
-        # If we've exhausted all retries, log and re-raise the last exception
-        logger.error(f"LLM API call failed after {self.max_retries} retries. Last error: {str(last_exception)}")
-        raise last_exception
     
     def __init__(self, tool_functions, function_declarations):
         """
@@ -98,17 +54,8 @@ class ResearchAgent:
         self.max_retries = 3
         self.retry_delay = 1  # seconds
         
-        # Create the model with tools
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            generation_config={
-                "temperature": 0.1,
-                "top_p": 0.95,
-                "top_k": 64,
-                "max_output_tokens": 8192,
-            },
-            tools=[Tool(function_declarations=function_declarations)]
-        )
+        # Create reflection evaluator for self-reflection and refinement
+        self.reflection_evaluator = ReflectionEvaluator()
         
         # Enhanced system instruction
         self.system_instruction = """You are a helpful research assistant specialized in scientific and coding topics. 
@@ -129,21 +76,20 @@ For complex queries that involve multiple steps or require detailed research:
 
 Always provide clear explanations and analyze your results thoroughly."""
         
-        # Initialize the chat session
-        logger.info("Initializing chat session...")
-        self.chat = self.model.start_chat()
+        # Create model manager for flexible model selection and reflection
+        self.model_manager = ModelManager(
+            reflection_evaluator=self.reflection_evaluator,
+            function_declarations=function_declarations
+        )
         
         # Send the system instruction to initialize the chat
-        self.chat.send_message(self.system_instruction)
+        self.model_manager.send_message(self.system_instruction)
         
         # Create a plan manager with memory capabilities
         self.plan_manager = PlanManager()
         
         # Create a web utilities object
         self.web_utils = WebUtils()
-        
-        # Create a reflection evaluator for self-reflection and refinement
-        self.reflection_evaluator = ReflectionEvaluator()
         
         # Direct access to memory for agent-level operations
         self.memory = self.plan_manager.memory_manager
@@ -155,6 +101,28 @@ Always provide clear explanations and analyze your results thoroughly."""
         logger.info("Agent initialized successfully!")
         # Start a new conversation session log
         log_conversation_session_start()
+
+    def send_message_with_retry(self, message, use_reflection=False, reflection_context=None, model_tier=None):
+        """
+        Send a message to the LLM with reflection-based refinement and retry logic.
+        
+        Args:
+            message: The message to send to the LLM
+            use_reflection: Whether to use reflection to refine the response
+            reflection_context: Context for reflection (goal, step_description)
+            model_tier: Which model tier to use ("light", "standard", or "advanced")
+            
+        Returns:
+            The LLM response
+        """
+        return self.model_manager.send_message(
+            message=message,
+            model_tier=model_tier,
+            use_reflection=use_reflection,
+            reflection_context=reflection_context,
+            max_retries=self.max_retries,
+            retry_delay=self.retry_delay
+        )
     
     def handle_function_call(self, response):
         """Process any function calls in the response"""
@@ -289,6 +257,7 @@ Always provide clear explanations and analyze your results thoroughly."""
                     logger.warning(f"Unknown function: {function_name}")
         
         return None
+    
     def _execute_step(self, step_instruction):
         """Executes a single step of the plan with self-reflection and refinement"""
         logger.info(f"Executing step: {step_instruction}")
@@ -312,7 +281,20 @@ Always provide clear explanations and analyze your results thoroughly."""
         # Add instruction for current step
         context_prompt += f"Now execute this step: {step_instruction}"
 
-        response = self.send_message_with_retry(context_prompt)
+        # Create reflection context for this step
+        reflection_context = {
+            "goal": self.plan_manager.original_goal,
+            "step_description": step_instruction
+        }
+        
+        # Use reflection by default for step execution
+        response = self.send_message_with_retry(
+            message=context_prompt,
+            use_reflection=True,
+            reflection_context=reflection_context,
+            model_tier="standard"  # Use standard model for step execution
+        )
+        
         function_call = get_function_call(response)
 
         if function_call:
@@ -323,45 +305,15 @@ Always provide clear explanations and analyze your results thoroughly."""
             step_result = get_text_response(response)
             result_text = step_result if step_result else "No result for this step."
             
-        # Self-reflection: evaluate the result quality
+        # Plan refinement assessment
         evaluation = self.reflection_evaluator.evaluate_result(
             goal=self.plan_manager.original_goal,
             step_description=step_instruction,
             result=result_text
         )
         
-        # Process the evaluation
-        if evaluation["recommendation"] == "proceed":
-            # Result is adequate, continue with the plan
-            logger.info("Step result evaluated as adequate, proceeding with plan")
-            return result_text
-            
-        elif evaluation["recommendation"] == "retry" and self.retry_counts[step_key] < self.max_retries:
-            # Result is inadequate, retry the step with refinement
-            logger.info(f"Step result inadequate, retrying (attempt {self.retry_counts[step_key] + 1}/{self.max_retries})")
-            
-            # Generate refinement for the step
-            refinement = self.reflection_evaluator.generate_step_refinement(
-                goal=self.plan_manager.original_goal,
-                step_description=step_instruction,
-                current_result=result_text,
-                issues=evaluation["issues"]
-            )
-            
-            # Increment retry count
-            self.retry_counts[step_key] += 1
-            
-            # Execute the refined step
-            refined_step = refinement["refined_step"]
-            logger.info(f"Executing refined step: {refined_step}")
-            
-            # Recursive call with the refined step
-            refined_result = self._execute_step(refined_step)
-            
-            # Return the refined result
-            return refined_result
-            
-        elif evaluation["recommendation"] == "refine_plan":
+        # Process the evaluation for plan-level adjustments
+        if evaluation["recommendation"] == "refine_plan":
             # The plan itself needs refinement
             logger.info("Evaluation suggests plan refinement is needed")
             
@@ -373,12 +325,7 @@ Always provide clear explanations and analyze your results thoroughly."""
             return result_text + "\n\n[NOTE: This result indicates the plan may need refinement.]"
             
         else:
-            # Max retries reached or default case
-            if self.retry_counts[step_key] >= self.max_retries:
-                logger.warning(f"Max retries ({self.max_retries}) reached for step, proceeding with best result")
-                return result_text + "\n\n[NOTE: This result was obtained after multiple retry attempts.]"
-            
-            # Default fallback
+            # No plan adjustment needed, result is usable
             return result_text
     
     def process_query(self, query):
@@ -433,7 +380,15 @@ Always provide clear explanations and analyze your results thoroughly."""
                 logger.info("Plan finished. Generating summary.")
                 # Generate summary prompt and send to model
                 summary_prompt = self.plan_manager.generate_plan_summary_prompt()
-                response = self.chat.send_message(summary_prompt)
+                
+                # Use reflection for final summary with advanced model
+                response = self.send_message_with_retry(
+                    message=summary_prompt,
+                    use_reflection=True,
+                    reflection_context={"goal": self.plan_manager.original_goal, "step_description": "Generate final summary"},
+                    model_tier="advanced"  # Use advanced model for final summary
+                )
+                
                 final_response = get_text_response(response)
                 # Reset plan state
                 logger.info("Resetting plan state.")
@@ -454,9 +409,18 @@ Always provide clear explanations and analyze your results thoroughly."""
 
             # Check if query requires detailed info to enforce planning mode
             if self.plan_manager.requires_detailed_info(query):
-                # Enforce the model to create a plan                planning_prompt = f"This query requires a methodical research approach: '{query}'\nYou MUST create a multi-step plan. Present your plan as a numbered list including specific steps for searching, data gathering, and analysis. Do not call functions directly."
+                # Enforce the model to create a plan
+                planning_prompt = f"This query requires a methodical research approach: '{query}'\nYou MUST create a multi-step plan. Present your plan as a numbered list including specific steps for searching, data gathering, and analysis. Do not call functions directly."
                 logger.info("Query appears to need detailed investigation. Enforcing planning mode.")
-                response = self.send_message_with_retry(planning_prompt)
+                
+                # Use standard model for planning with reflection
+                response = self.send_message_with_retry(
+                    message=planning_prompt,
+                    use_reflection=True,
+                    reflection_context={"goal": query, "step_description": "Create a detailed research plan"},
+                    model_tier="standard"
+                )
+                
                 # Check for a plan in the response
                 text_response = get_text_response(response)
                 logger.info(f"LLM response: {text_response}")
@@ -467,13 +431,28 @@ Always provide clear explanations and analyze your results thoroughly."""
                     # Try again with stronger enforcement
                     logger.info("No plan detected in first attempt. Trying again with stronger enforcement.")                    
                     planning_prompt = f"For this query: '{query}'\nYou MUST create a step-by-step plan as a numbered list. Do not answer directly. Do not call functions directly. First plan out the steps, then we will execute them one by one."
-                    response = self.send_message_with_retry(planning_prompt)
+                    
+                    # Try with advanced model for better planning
+                    response = self.send_message_with_retry(
+                        message=planning_prompt,
+                        use_reflection=True,
+                        reflection_context={"goal": query, "step_description": "Create a detailed research plan"},
+                        model_tier="advanced"
+                    )
+                    
                     text_response = get_text_response(response)
                     logger.info(f"LLM response: {text_response}")                    
                     parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)            
             else:                
                 # Send the query as a message to the model
-                response = self.send_message_with_retry(query)
+                # Use light model for simple queries
+                response = self.send_message_with_retry(
+                    message=query,
+                    use_reflection=True,
+                    reflection_context={"goal": query, "step_description": query},
+                    model_tier="light"
+                )
+                
                 text_response = get_text_response(response)
                 parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)
                 
@@ -542,7 +521,15 @@ Always provide clear explanations and analyze your results thoroughly."""
                 if not self.plan_manager.has_active_plan():
                     logger.info("One-step plan finished. Generating summary.")                    
                     summary_prompt = self.plan_manager.generate_one_step_summary_prompt()
-                    response = self.send_message_with_retry(summary_prompt)
+                    
+                    # Use advanced model for final summary with reflection
+                    response = self.send_message_with_retry(
+                        message=summary_prompt,
+                        use_reflection=True,
+                        reflection_context={"goal": query, "step_description": "Generate summary for one-step plan"},
+                        model_tier="advanced"
+                    )
+                    
                     final_response = plan_announcement + get_text_response(response)
                     # Reset plan state
                     logger.info("Resetting plan state.")
@@ -570,7 +557,15 @@ Always provide clear explanations and analyze your results thoroughly."""
                 
                 # Generate summary for single-step plan
                 summary_prompt = self.plan_manager.generate_one_step_summary_prompt()
-                response = self.chat.send_message(summary_prompt)
+                
+                # Use standard model with reflection for simple summaries
+                response = self.send_message_with_retry(
+                    message=summary_prompt,
+                    use_reflection=True,
+                    reflection_context={"goal": query, "step_description": "Generate summary for simple query"},
+                    model_tier="standard"
+                )
+                
                 final_response = get_text_response(response)
                 logger.info("Resetting plan state.")
                 log_plan_completed(self.plan_manager.original_goal)
@@ -603,7 +598,8 @@ Always provide clear explanations and analyze your results thoroughly."""
             
             # Check if we need to continue
             plan_in_progress = self.plan_manager.has_active_plan()
-          # Ensure memories are saved after conversation ends
+            
+        # Ensure memories are saved after conversation ends
         if hasattr(self, 'memory'):
             logger.info("Saving important memories from this conversation")
             self.memory.persist_important_memories()
@@ -662,5 +658,15 @@ Always provide clear explanations and analyze your results thoroughly."""
             response += f" (Source: {source})\n\n"
             
         return response
+    
+    def set_model_tier(self, model_tier):
+        """
+        Switch to a different model tier
+        
+        Args:
+            model_tier: One of "light", "standard", or "advanced"
             
-        return agent_response
+        Returns:
+            True if successful, False otherwise
+        """
+        return self.model_manager.switch_model(model_tier, self.system_instruction)
