@@ -1,0 +1,25 @@
+# Dependency directories
+node_modules
+venv
+
+# Test data
+test_data
+
+# Python bytecode files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# enhanced-research-agent
+enhanced-research-agent/examples/logs
+enhanced-research-agent/examples/test_results
+enhanced-research-agent/examples/data

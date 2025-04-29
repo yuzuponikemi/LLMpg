@@ -1,0 +1,207 @@
+"""
+Planning functionality for the research agent
+"""
+
+import time
+import re
+from typing import List, Optional, Dict, Any
+
+from src.logger.agent_logger import setup_logger
+from src.agent.memory import MemoryManager
+
+# Setup logger for this module
+logger = setup_logger(logger_name="plan_manager")
+
+class PlanManager:
+    """Manages the creation, execution, and tracking of plans"""
+    
+    def __init__(self, memory_manager=None):
+        # Planning state variables
+        self.current_plan = None  # List of steps to execute
+        self.current_step_index = -1  # Current step being executed (-1 means no current step)
+        self.original_goal = None  # Keep track of the original user query
+        self.step_results = []  # Store results from each step of the plan
+        
+        # Plan refinement flags
+        self.plan_needs_refinement = False
+        self.refinement_issues = []
+        
+        # Initialize or use provided memory manager
+        self.memory_manager = memory_manager if memory_manager else MemoryManager()    
+    
+    
+    def reset_plan(self):
+        """Reset all plan-related state variables"""
+        # Before clearing plan state, persist important information to long-term memory
+        if hasattr(self, 'memory_manager'):
+            self.memory_manager.persist_important_memories()
+            self.memory_manager.clear_working_memory()
+            
+        self.current_plan = None
+        self.current_step_index = -1
+        self.original_goal = None
+        self.step_results = []
+        
+        # Reset refinement flags
+        self.plan_needs_refinement = False
+        self.refinement_issues = []
+        
+    def has_active_plan(self):
+        """Check if there's an active plan being executed"""
+        return self.current_plan is not None and self.current_step_index < len(self.current_plan)
+    
+    def is_plan_complete(self):
+        """Check if the current plan has been fully executed"""
+        return self.current_plan is not None and self.current_step_index >= len(self.current_plan)
+    
+    def current_step(self):
+        """Get the current step instruction"""
+        if not self.has_active_plan():
+            return None
+        return self.current_plan[self.current_step_index]
+    
+    def next_step(self):
+        """Get the next step instruction"""
+        if not self.has_active_plan() or self.current_step_index + 1 >= len(self.current_plan):
+            return None
+        return self.current_plan[self.current_step_index + 1]
+    
+    def store_step_result(self, step_instruction, step_result):
+        """Store the result of a step execution"""
+        result_text = f"Result of Step {self.current_step_index + 1} ('{step_instruction}'):\n{step_result}\n"
+        self.step_results.append(result_text)
+        
+        # Store in memory manager for better recall and persistence
+        if hasattr(self, 'memory_manager'):
+            self.memory_manager.store_step_result(
+                step_instruction=step_instruction,
+                step_result=step_result,
+                goal=self.original_goal
+            )
+        
+    def advance_to_next_step(self):
+        """Move to the next step in the plan"""
+        if self.has_active_plan():
+            self.current_step_index += 1
+            
+    def set_new_plan(self, plan, goal):
+        """Set a new plan and the associated goal"""
+        self.current_plan = plan
+        self.current_step_index = 0
+        self.original_goal = goal
+        self.step_results = []
+        
+        # Initialize working memory for this plan
+        if hasattr(self, 'memory_manager'):
+            self.memory_manager.clear_working_memory()
+            # Store the plan context in working memory
+            self.memory_manager.working_memory["context"] = {
+                "goal": goal,
+                "plan_steps": plan,
+                "start_time": time.time()
+            }
+        
+    def generate_plan_summary_prompt(self):
+        """Generate a prompt for summarizing all steps in a completed plan"""
+        if not self.step_results:
+            return None
+            
+        summary_prompt = f"The original goal was: '{self.original_goal}'. The following steps were executed with their results:\n\n"
+        summary_prompt += ''.join(self.step_results)
+        
+        # Add relevant memories from the memory manager if available
+        if hasattr(self, 'memory_manager'):
+            memory_context = self.memory_manager.generate_memory_context(self.original_goal)
+            if memory_context:
+                summary_prompt += f"\n\nAdditional context from memory:\n{memory_context}"
+                
+        summary_prompt += "\n\nPlease provide a final comprehensive summary based on these results."
+        
+        return summary_prompt
+        
+    def generate_one_step_summary_prompt(self):
+        """Generate a prompt for summarizing a one-step plan"""
+        if not self.step_results or len(self.step_results) != 1:
+            return None
+            
+        summary_prompt = f"The original goal was: '{self.original_goal}'. The plan had one step with this result:\n\n"
+        summary_prompt += self.step_results[0]
+        
+        # Add relevant memories from the memory manager if available
+        if hasattr(self, 'memory_manager'):
+            memory_context = self.memory_manager.generate_memory_context(self.original_goal)
+            if memory_context:
+                summary_prompt += f"\n\nAdditional context from memory:\n{memory_context}"
+                
+        summary_prompt += "\n\nPlease provide a final comprehensive summary based on these results."
+        
+        return summary_prompt
+    
+    def extract_plan_from_llm_response(self, text):
+        """
+        Enhanced function to extract a plan from LLM response text.
+        This extends the basic parse_plan_from_text functionality with
+        additional plan detection capabilities specific to the research agent.
+        
+        Args:
+            text (str): The LLM response text
+            
+        Returns:
+            list: A list of plan steps if a plan is detected, None otherwise
+        """
+        from src.agent.utils import parse_plan_from_text
+        
+        # First try the standard parser
+        plan = parse_plan_from_text(text)
+        if plan:
+            logger.info(f"Standard plan parser detected {len(plan)} steps")
+            return plan
+        
+        # More aggressive parsing if standard parser fails
+        logger.info("Standard plan parsing failed, attempting enhanced parsing")
+        
+        # Look for any kind of numbered or bulleted list
+        patterns = [
+            r"^\s*\d+[\.\)]\s+(.*?)(?:\n|$)",  # Numbered lists (1. or 1) format)
+            r"^\s*[\*\-\•]\s+(.*?)(?:\n|$)",    # Bullet points (*, -, •)
+            r"^\s*(?:Step|STEP)\s+\d+:?\s+(.*?)(?:\n|$)",  # "Step X:" format
+            r"(?:First|Second|Third|Fourth|Fifth|Lastly|Finally),\s+(.*?)(?:\n|$)"  # Natural language steps
+        ]
+        
+        for pattern in patterns:
+            steps = re.findall(pattern, text, re.MULTILINE)
+            if steps and len(steps) >= 2:
+                logger.info(f"Enhanced plan parser detected {len(steps)} steps using pattern: {pattern}")
+                return [step.strip() for step in steps if step.strip()]
+        
+        # Last attempt: check for research-specific patterns
+        research_patterns = [
+            r"(?:search|research|analyze|gather|collect|compile|investigate)(?:ing)?\s+(?:for|about|on)\s+(.*?)(?:\n|$)",
+            r"(?:examine|extract|identify|explore)\s+(.*?)(?:\n|$)",
+            r"(?:summarize|synthesize|conclude|report)\s+(.*?)(?:\n|$)"
+        ]
+        
+        research_steps = []
+        for pattern in research_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+            research_steps.extend(matches)
+            
+        if len(research_steps) >= 2:
+            logger.info(f"Extracted {len(research_steps)} research-oriented steps")
+            return [step.strip() for step in research_steps if step.strip()]
+            
+        logger.info("No plan detected after all parsing attempts")
+        return None
+        
+    def requires_detailed_info(self, query):
+        """
+        Evaluates whether a query requires a structured research approach.
+        Returns True for complex queries that would benefit from planning.
+        Delegates to the advanced QueryEvaluator which uses LLM inference.
+        """
+        # Use the query evaluator implementation
+        from src.agent.query_evaluator import QueryEvaluator
+        
+        # Create an evaluator instance and use it
+        evaluator = QueryEvaluator()
+        return evaluator.requires_detailed_info(query)

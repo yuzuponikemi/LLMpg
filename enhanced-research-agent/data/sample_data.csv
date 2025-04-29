@@ -1,0 +1,9 @@
+date,temperature,humidity,wind_speed,weather_condition
+2025-04-20,22.5,65,12,Sunny
+2025-04-21,18.7,72,15,Cloudy
+2025-04-22,17.2,85,22,Rainy
+2025-04-23,21.0,68,8,Partly Cloudy
+2025-04-24,24.5,55,10,Sunny
+2025-04-25,23.8,62,14,Sunny
+2025-04-26,19.5,75,18,Cloudy
+2025-04-27,16.8,88,25,Rainy
