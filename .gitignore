@@ -23,3 +23,5 @@ logs/
 enhanced-research-agent/examples/logs
 enhanced-research-agent/examples/test_results
 enhanced-research-agent/examples/data
+
+.env
