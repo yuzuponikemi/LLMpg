@@ -11,7 +11,7 @@ from datetime import datetime
 # Constants for log configuration
 LOG_DIRECTORY = "logs"
 LOG_FILE_FORMAT = "%Y-%m-%d_%H-%M-%S"
-DEFAULT_LOG_LEVEL = logging.INFO
+DEFAULT_LOG_LEVEL = logging.DEBUG
 MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
 BACKUP_COUNT = 5
 

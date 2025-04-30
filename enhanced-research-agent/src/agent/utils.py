@@ -2,13 +2,31 @@
 Utility functions for the research agent
 """
 import re
+from src.logger.agent_logger import setup_logger
+
+# Setup logger for this module
+logger = setup_logger(logger_name="agent_utils")
 
 def get_text_response(response):
     """Extracts the text response from the Gemini API result."""
     if response and response.candidates and response.candidates[0].content:
-        # Combine text parts, ignoring function calls/responses
-        text_parts = [part.text for part in response.candidates[0].content.parts if hasattr(part, 'text')]
-        return "".join(text_parts)
+        # Combine text parts, properly handling function calls/responses
+        text_parts = []
+        function_call_count = 0
+        
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'text'):
+                text_parts.append(part.text)
+            elif hasattr(part, 'function_call') and part.function_call:
+                function_call_count += 1
+            # Skip parts with function_call attributes instead of trying to convert them
+            # This prevents the "Could not convert `part.function_call` to text" warning
+        
+        result = "".join(text_parts)
+        logger.info(f"Extracted text response (length: {len(result)}, function_calls: {function_call_count})")
+        return result
+    
+    logger.warning("Could not extract text from response: no valid content found")
     return None
 
 def get_function_call(response):
@@ -18,8 +36,35 @@ def get_function_call(response):
         if candidate.content and candidate.content.parts:
             for part in candidate.content.parts:
                 if hasattr(part, 'function_call') and part.function_call:
+                    logger.info(f"Function call found: {part.function_call.name}")
                     return part.function_call
+    
+    logger.debug("No function call found in response")
     return None
+
+def get_function_calls(response):
+    """
+    Checks if the response contains multiple function calls and returns them as a list.
+    Use this when the model might return multiple function calls in one response.
+    
+    Returns:
+        list: A list of function call objects, or empty list if none found
+    """
+    function_calls = []
+    
+    if response and response.candidates:
+        candidate = response.candidates[0]
+        if candidate.content and candidate.content.parts:
+            for part in candidate.content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_calls.append(part.function_call)
+    
+    if function_calls:
+        logger.info(f"Found {len(function_calls)} function calls: {', '.join(fc.name for fc in function_calls)}")
+    else:
+        logger.debug("No function calls found in response")
+        
+    return function_calls
 
 def parse_plan_from_text(text):
     """

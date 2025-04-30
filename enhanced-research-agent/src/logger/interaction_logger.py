@@ -50,9 +50,30 @@ def log_function_call(function_name: str, args: Dict[str, Any]) -> None:
     for key, value in filtered_args.items():
         if isinstance(value, str) and len(value) > 500:
             filtered_args[key] = f"[{len(value)} chars]"
+        elif isinstance(value, (list, dict)) and str(value) and len(str(value)) > 500:
+            filtered_args[key] = f"[{type(value).__name__} with approx. {len(str(value))} chars]"
     
     interaction_logger.info(f"FUNCTION CALL: {function_name} - Args: {filtered_args}")
     default_logger.info(f"Function call: {function_name}")
+
+def safe_encode(text):
+    """
+    Safely encode text to ensure it can be logged without Unicode errors.
+    
+    Args:
+        text: The text to encode safely
+        
+    Returns:
+        A safely encoded string with problematic characters replaced
+    """
+    if isinstance(text, str):
+        try:
+            # Try to encode with ASCII, replacing problematic characters
+            return text.encode('ascii', 'replace').decode('ascii')
+        except Exception:
+            # Fallback - replace characters that might cause issues
+            return ''.join(c if ord(c) < 128 else '?' for c in text)
+    return str(text)
 
 def log_function_result(function_name: str, result: Any) -> None:
     """
@@ -62,20 +83,27 @@ def log_function_result(function_name: str, result: Any) -> None:
         function_name: The name of the called function
         result: The result returned by the function
     """
-    # For handling different result types
-    if isinstance(result, str):
-        result_summary = result[:500] + "..." if len(result) > 500 else result
-    elif isinstance(result, dict):
-        result_summary = {k: f"[{len(str(v))} chars]" if isinstance(v, str) and len(str(v)) > 100 else v 
-                          for k, v in list(result.items())[:5]}
-        if len(result) > 5:
-            result_summary["..."] = f"[{len(result) - 5} more keys]"
-    elif isinstance(result, list):
-        result_summary = f"[List with {len(result)} items]"
-    else:
-        result_summary = str(result)[:200]
-    
-    interaction_logger.info(f"FUNCTION RESULT: {function_name} - Result: {result_summary}")
+    try:
+        # For handling different result types
+        if isinstance(result, str):
+            result_summary = result[:500] + "..." if len(result) > 500 else result
+        elif isinstance(result, dict):
+            result_summary = {k: f"[{len(str(v))} chars]" if isinstance(v, str) and len(str(v)) > 100 else v 
+                            for k, v in list(result.items())[:5]}
+            if len(result) > 5:
+                result_summary["..."] = f"[{len(result) - 5} more keys]"
+        elif isinstance(result, list):
+            result_summary = f"[List with {len(result)} items]"
+        else:
+            result_summary = str(result)[:200]
+        
+        # Safely encode the result summary before logging
+        safe_result = safe_encode(str(result_summary))
+        interaction_logger.info(f"FUNCTION RESULT: {function_name} - Result: {safe_result}")
+    except Exception as e:
+        # If there's still an error, log the error instead of the result
+        interaction_logger.warning(f"FUNCTION RESULT: {function_name} - Result logging failed: {str(e)}")
+        
     default_logger.info(f"Function completed: {function_name}")
 
 def log_plan_created(plan_steps: List[str], goal: str) -> None:
@@ -128,6 +156,27 @@ def log_plan_completed(goal: str) -> None:
     """
     interaction_logger.info(f"PLAN COMPLETED: For goal '{goal}'")
     default_logger.info(f"Plan completed for goal: {goal}")
+    
+def log_refinement(step: str, refinement: str, reasoning: Optional[str] = None) -> None:
+    """
+    Log when a step in the plan has been refined.
+    
+    Args:
+        step: The original step that needed refinement
+        refinement: The refined approach/instruction
+        reasoning: Optional explanation of why the refinement should work better
+    """    # Truncate step name if it's too long
+    step_display = f"{step[:50]}..." if len(step) > 50 else step
+    interaction_logger.info(f"REFINEMENT FOR STEP: '{step_display}'")
+    interaction_logger.info(f"REFINED STEP: {refinement}")
+    
+    if reasoning:
+        interaction_logger.info(f"REFINEMENT REASONING: {reasoning}")
+    
+    # Truncate step and refinement for the default log
+    step_short = f"{step[:30]}..." if len(step) > 30 else step
+    refinement_short = f"{refinement[:30]}..." if len(refinement) > 30 else refinement
+    default_logger.info(f"Step refined: {step_short} -> {refinement_short}")
 
 def log_conversation_session_start() -> None:
     """Log the start of a new conversation session."""
@@ -171,30 +220,60 @@ def log_reflection(goal: str, step: str, result: str, evaluation: Dict[str, Any]
     recommendation = evaluation.get('recommendation', 'proceed')
     
     interaction_logger.info(f"REFLECTION: Step '{step[:50]}...' - {'ADEQUATE' if is_adequate else 'INADEQUATE'}")
-    interaction_logger.info(f"  Recommendation: {recommendation.upper()}")
+    interaction_logger.info(f"REFLECTION ACTION: {recommendation.upper()}")
     
     if 'issues' in evaluation and evaluation['issues']:
-        interaction_logger.info(f"  Issues: {evaluation['issues']}")
-    
-    if 'justification' in evaluation:
-        interaction_logger.info(f"  Justification: {evaluation['justification'][:200]}")
+        interaction_logger.info(f"REFLECTION ISSUES: {evaluation['issues']}")
     
     default_logger.info(f"Step reflection: {recommendation.upper()}")
 
-def log_refinement(goal: str, original_step: str, result: str, refinement: Dict[str, str]) -> None:
+def log_llm_query(query: str, model: str = None) -> None:
     """
-    Log the agent's refinement of a step or plan.
+    Log a query sent to the LLM.
     
     Args:
-        goal: The original goal/query
-        original_step: The original step being refined
-        result: The result that prompted refinement
-        refinement: The refinement details
+        query: The query/prompt text sent to the LLM
+        model: Optional model identifier
     """
-    refined_step = refinement.get('refined_step', '')
-    reasoning = refinement.get('reasoning', '')
+    # Truncate very long queries for log readability
+    log_query = query
     
-    interaction_logger.info(f"REFINEMENT: From '{original_step[:50]}...' to '{refined_step[:50]}...'")
-    interaction_logger.info(f"  Reasoning: {reasoning[:200]}")
+    model_info = f" [{model}]" if model else ""
+    interaction_logger.info(f"LLM QUERY{model_info}: {log_query}")
+    default_logger.debug(f"Sent query to LLM{model_info} (length: {len(query)})")
+
+def log_llm_response(response: str, model: str = None) -> None:
+    """
+    Log a response received from the LLM.
     
-    default_logger.info(f"Step refined: {original_step[:30]}... -> {refined_step[:30]}...")
+    Args:
+        response: The response text received from the LLM
+        model: Optional model identifier
+    """
+    # Truncate very long responses for log readability
+    log_response = response
+    
+    model_info = f" [{model}]" if model else ""
+    interaction_logger.info(f"LLM RESPONSE{model_info}: {log_response}")
+    default_logger.debug(f"Received response from LLM{model_info}")
+
+def log_tool_completion(tool_name: str, time_taken: float) -> None:
+    """
+    Log the completion of a tool operation with time taken.
+    
+    Args:
+        tool_name: Name of the tool that completed
+        time_taken: Time taken in seconds for the operation
+    """
+    interaction_logger.info(f"TOOL COMPLETED: {tool_name} (took {time_taken:.2f}s)")
+    default_logger.info(f"Tool {tool_name} completed in {time_taken:.2f}s")
+
+def log_multiple_function_calls_detected(count: int) -> None:
+    """
+    Log when multiple function calls are detected in a single LLM response.
+    
+    Args:
+        count: The number of function calls detected
+    """
+    interaction_logger.info(f"MULTIPLE FUNCTION CALLS: Detected {count} function calls in a single response")
+    default_logger.info(f"Multiple function calls detected ({count}) - will process one at a time")

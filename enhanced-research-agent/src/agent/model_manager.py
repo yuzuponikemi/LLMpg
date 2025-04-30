@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional, Union
 
 from src.logger.agent_logger import setup_logger
 
+
 # Setup logger for this module
 logger = setup_logger(logger_name="model_manager")
 
@@ -21,7 +22,7 @@ class ModelManager:
     # Model tier configurations
     MODEL_TIERS = {
         "light": {
-            "model_name": "gemini-1.0-flash",
+            "model_name": "gemini-1.5-flash",
             "generation_config": {
                 "temperature": 0.2,
                 "top_p": 0.95,
@@ -39,7 +40,7 @@ class ModelManager:
             }
         },
         "advanced": {
-            "model_name": "gemini-2.0-pro",
+            "model_name": "gemini-2.5-pro-preview-03-25",
             "generation_config": {
                 "temperature": 0.1,
                 "top_p": 0.95,
@@ -139,6 +140,9 @@ class ModelManager:
         Returns:
             The LLM response
         """
+        # Import interaction logger here to avoid circular imports
+        from src.logger.interaction_logger import log_llm_query, log_llm_response, log_multiple_function_calls_detected
+        
         # Use specified model or active model
         tier = model_tier if model_tier else self.active_model_tier
         
@@ -156,20 +160,59 @@ class ModelManager:
         while retry_count <= max_retries:
             try:
                 logger.debug(f"Sending message to {tier} model (Attempt {retry_count + 1}/{max_retries + 1})")
+                # Log the LLM query with model tier info
+                log_llm_query(message, model=self.MODEL_TIERS[tier]["model_name"])
                 response = chat.send_message(message)
+                log_llm_response(response, model=self.MODEL_TIERS[tier]["model_name"])
+                
+                # Check for multiple function calls
+                from src.agent.utils import get_function_calls
+                function_calls = get_function_calls(response)
+                if len(function_calls) > 1:
+                    # Log the detection of multiple function calls
+                    log_multiple_function_calls_detected(len(function_calls))
+                    
+                    # Create a modified system prompt to inform the model about one call at a time
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        retry_message = f"""
+I noticed your response included {len(function_calls)} function calls in a single turn.
+Due to system limitations, please make only one function call at a time.
+For the task: {message}
+First, execute just the first step/function, then I'll ask for the next steps afterward.
+"""
+                        logger.info(f"Requesting single function call (Attempt {retry_count}/{max_retries})")
+                        message = retry_message
+                        continue  # Retry with the updated message
                 
                 # If no reflection or evaluator not available, return the response directly
                 if not use_reflection or not self.reflection_evaluator or not reflection_context:
                     return response
-                    
-                # Extract text from response for reflection
-                if hasattr(response, 'text'):
-                    response_text = response.text
-                elif hasattr(response, 'candidates') and response.candidates:
-                    from src.agent.utils import get_text_response
-                    response_text = get_text_response(response)
-                else:
-                    logger.warning("Could not extract text from response for reflection")
+                      # Extract text from response for reflection
+                try:
+                    # First try to get text directly
+                    if hasattr(response, 'text'):
+                        response_text = response.text
+                    # Next try to get text from candidates
+                    elif hasattr(response, 'candidates') and response.candidates:
+                        from src.agent.utils import get_text_response
+                        response_text = get_text_response(response)
+                    # Check for function calls
+                    elif hasattr(response, 'candidates') and response.candidates[0].content.parts:
+                        for part in response.candidates[0].content.parts:
+                            if hasattr(part, 'function_call'):
+                                # If we have a function call, create a textual representation
+                                func_name = part.function_call.name
+                                response_text = f"[Function Call: {func_name}]"
+                                break
+                        else:
+                            response_text = "No extractable text content"
+                    else:
+                        logger.warning("Could not extract text from response for reflection")
+                        return response
+                except Exception as text_error:
+                    logger.warning(f"Error extracting text from response: {str(text_error)}")
+                    response_text = "[Could not extract text from response]"
                     return response
                 
                 # Evaluate response quality with reflection

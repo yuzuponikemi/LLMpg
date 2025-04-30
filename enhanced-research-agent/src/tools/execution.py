@@ -22,14 +22,117 @@ logger = setup_logger(logger_name="code_execution")
 
 # Dictionary of allowed modules that can be imported in the sandbox
 ALLOWED_MODULES = {
+    # Data processing and analysis
     'pandas': pd,
     'numpy': np,
     'matplotlib.pyplot': plt,
+    
+    # Standard library modules
+    'math': __import__('math'),
+    'random': __import__('random'),
+    'statistics': __import__('statistics'),
+    'datetime': __import__('datetime'),
+    'calendar': __import__('calendar'),
+    'collections': __import__('collections'),
+    'itertools': __import__('itertools'),
+    'functools': __import__('functools'),
+    're': __import__('re'),  # Regular expressions
+    'csv': __import__('csv'),
     'json': json,
     'io': io,
     'StringIO': StringIO,
-    # Add other safe modules as needed
+    'base64': __import__('base64'),
+    'hashlib': __import__('hashlib'),
+    'time': __import__('time'),
+    'uuid': __import__('uuid'),
+    'urllib.parse': __import__('urllib.parse'),
+    'textwrap': __import__('textwrap'),
+    'string': __import__('string'),
+    'copy': __import__('copy'),
+    'decimal': __import__('decimal'),
+    'fractions': __import__('fractions'),
+    'difflib': __import__('difflib'),  # For text comparison
+    'heapq': __import__('heapq'),  # For heap queue algorithm
+    
+    # Science and numerical computing
+    'scipy': __import__('scipy') if 'scipy' in sys.modules else None,
+    'scipy.stats': __import__('scipy.stats', fromlist=['stats']) if 'scipy' in sys.modules else None,
+    'scipy.optimize': __import__('scipy.optimize', fromlist=['optimize']) if 'scipy' in sys.modules else None,
+    'scipy.spatial': __import__('scipy.spatial', fromlist=['spatial']) if 'scipy' in sys.modules else None,
+    'scipy.signal': __import__('scipy.signal', fromlist=['signal']) if 'scipy' in sys.modules else None,
+    'scipy.cluster': __import__('scipy.cluster', fromlist=['cluster']) if 'scipy' in sys.modules else None,
+    
+    # Machine Learning libraries
+    'sklearn': __import__('sklearn') if 'sklearn' in sys.modules else None,
+    'sklearn.preprocessing': __import__('sklearn.preprocessing', fromlist=['preprocessing']) if 'sklearn' in sys.modules else None,
+    'sklearn.model_selection': __import__('sklearn.model_selection', fromlist=['model_selection']) if 'sklearn' in sys.modules else None,
+    'sklearn.metrics': __import__('sklearn.metrics', fromlist=['metrics']) if 'sklearn' in sys.modules else None,
+    'sklearn.cluster': __import__('sklearn.cluster', fromlist=['cluster']) if 'sklearn' in sys.modules else None,
+    'sklearn.ensemble': __import__('sklearn.ensemble', fromlist=['ensemble']) if 'sklearn' in sys.modules else None,
+    'sklearn.linear_model': __import__('sklearn.linear_model', fromlist=['linear_model']) if 'sklearn' in sys.modules else None,
+    'sklearn.tree': __import__('sklearn.tree', fromlist=['tree']) if 'sklearn' in sys.modules else None,
+    'sklearn.neighbors': __import__('sklearn.neighbors', fromlist=['neighbors']) if 'sklearn' in sys.modules else None,
+    'sklearn.svm': __import__('sklearn.svm', fromlist=['svm']) if 'sklearn' in sys.modules else None,
+    'sklearn.decomposition': __import__('sklearn.decomposition', fromlist=['decomposition']) if 'sklearn' in sys.modules else None,
+    'sklearn.feature_extraction': __import__('sklearn.feature_extraction', fromlist=['feature_extraction']) if 'sklearn' in sys.modules else None,
+    'sklearn.feature_extraction.text': __import__('sklearn.feature_extraction.text', fromlist=['text']) if 'sklearn' in sys.modules else None,
+    'sklearn.pipeline': __import__('sklearn.pipeline', fromlist=['pipeline']) if 'sklearn' in sys.modules else None,
+    
+    # NLP libraries (if available)
+    'nltk': __import__('nltk') if 'nltk' in sys.modules else None,
+    'nltk.tokenize': __import__('nltk.tokenize', fromlist=['tokenize']) if 'nltk' in sys.modules else None,
+    'nltk.stem': __import__('nltk.stem', fromlist=['stem']) if 'nltk' in sys.modules else None,
+    'nltk.corpus': __import__('nltk.corpus', fromlist=['corpus']) if 'nltk' in sys.modules else None,
+    
+    # Data visualization enhancements
+    'seaborn': __import__('seaborn') if 'seaborn' in sys.modules else None,
+    'plotly': __import__('plotly') if 'plotly' in sys.modules else None,
+    'plotly.express': __import__('plotly.express', fromlist=['express']) if 'plotly' in sys.modules else None,
+    
+    # Stats models (if available)
+    'statsmodels': __import__('statsmodels') if 'statsmodels' in sys.modules else None,
+    'statsmodels.api': __import__('statsmodels.api', fromlist=['api']) if 'statsmodels' in sys.modules else None,
+    'statsmodels.formula.api': __import__('statsmodels.formula.api', fromlist=['api']) if 'statsmodels' in sys.modules else None,
 }
+
+def validate_imports(code_string):
+    """
+    Validate that the code only imports modules from the allowed list.
+    
+    Args:
+        code_string: The Python code to analyze
+        
+    Returns:
+        tuple: (is_valid, error_message) - is_valid is True if all imports are allowed,
+               False otherwise with an error_message explaining the issue
+    """
+    try:
+        # Parse the code into an AST
+        tree = ast.parse(code_string)
+        
+        # Find all import statements
+        for node in ast.walk(tree):
+            # Check for direct imports (import x)
+            if isinstance(node, ast.Import):
+                for name in node.names:
+                    module_name = name.name.split('.')[0]  # Get the base module name
+                    if module_name not in ALLOWED_MODULES:
+                        return False, f"Import of module '{module_name}' is not allowed. Only these modules are available: {', '.join(sorted(ALLOWED_MODULES.keys()))}"
+            
+            # Check for from imports (from x import y)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    module_name = node.module.split('.')[0]  # Get the base module name
+                    if module_name not in ALLOWED_MODULES:
+                        return False, f"Import from module '{module_name}' is not allowed. Only these modules are available: {', '.join(sorted(ALLOWED_MODULES.keys()))}"
+        
+        # All imports are valid
+        return True, ""
+        
+    except SyntaxError as e:
+        return False, f"Syntax error in code: {str(e)}"
+    except Exception as e:
+        return False, f"Error validating imports: {str(e)}"
 
 # Function declarations for Gemini API
 from google.generativeai.types import FunctionDeclaration, Tool
@@ -99,6 +202,16 @@ list_files_declaration = FunctionDeclaration(
             }
         },
         "required": ["directory_path"]
+    }
+)
+
+get_available_modules_declaration = FunctionDeclaration(
+    name="get_available_modules",
+    description="Returns information about all available modules that can be used in code execution. Use this before writing code to check which modules are available.",
+    parameters={
+        "type": "object",
+        "properties": {},  # No parameters needed
+        "required": []
     }
 )
 
@@ -182,6 +295,13 @@ def execute_code(code, description=""):
         result["error"] = f"Code execution rejected due to safety concerns: {safety_errors}"
         return result
     
+    # Validate imports
+    is_valid, import_error = validate_imports(code)
+    if not is_valid:
+        logger.warning(f"Invalid imports detected: {import_error}")
+        result["error"] = f"Code execution rejected due to invalid imports: {import_error}"
+        return result
+    
     # Create string buffers for stdout and stderr
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -202,45 +322,61 @@ def execute_code(code, description=""):
     # Add allowed modules to globals
     restricted_globals.update(ALLOWED_MODULES)
     
+    # Execute the code in the restricted environment
     try:
-        # Redirect stdout and stderr
         with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-            # Execute the code
-            exec_globals = {}
-            exec(code, restricted_globals, exec_globals)
+            # Compile the code to detect syntax errors before execution
+            compiled_code = compile(code, "<string>", "exec")
             
-            # Check if a plot was created
-            if plt.get_fignums():
-                result["has_plot"] = True
-                # Save the plot to a BytesIO object
-                img_data = io.BytesIO()
-                plt.savefig(img_data, format='png')
-                plt.close()
-                img_data.seek(0)
-                
-                # Convert to base64 for easier transmission
-                import base64
-                result["plot_data"] = base64.b64encode(img_data.read()).decode()
-                
-        # Get stdout and stderr
+            # Execute the code with restricted globals and locals
+            exec_locals = {}
+            exec(compiled_code, restricted_globals, exec_locals)
+            
+        # Capture stdout and stderr
         result["stdout"] = stdout_buffer.getvalue()
         result["stderr"] = stderr_buffer.getvalue()
         
-        # Look for variables that might be a result
-        for var_name in ["result", "output", "data", "df", "answer"]:
-            if var_name in exec_globals:
-                result["return_value"] = str(exec_globals[var_name])
-                # For DataFrames, display a proper representation
-                if isinstance(exec_globals[var_name], pd.DataFrame):
-                    result["return_value"] = exec_globals[var_name].to_string()
-                break
-                
-    except Exception as e:
-        # Catch any exceptions during execution
-        result["error"] = f"Error during execution: {str(e)}\n{traceback.format_exc()}"
-        logger.error(f"Code execution error: {str(e)}")
+        # Check for return value or variable definitions
+        if "__return__" in exec_locals:
+            result["return_value"] = exec_locals["__return__"]
+        
+        # Check if a matplotlib plot was created
+        if "pyplot" in code or "plt" in code:
+            if plt.get_fignums():
+                result["has_plot"] = True
+                # Save plot to base64
+                buffer = io.BytesIO()
+                plt.savefig(buffer, format="png")
+                buffer.seek(0)
+                import base64
+                result["plot_data"] = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
+                plt.close('all')  # Close all plots
+        
+        logger.info("Code executed successfully")
+        return result
     
-    return result
+    except ModuleNotFoundError as e:
+        # Enhanced error message for module errors
+        error_msg = f"Error: {str(e)}. Only these modules are available: {', '.join(sorted(ALLOWED_MODULES.keys()))}"
+        logger.error(error_msg)
+        result["error"] = error_msg
+        result["stderr"] = stderr_buffer.getvalue() + f"\n{error_msg}"
+        return result
+    except ImportError as e:
+        # Enhanced error message for import errors
+        error_msg = f"Import Error: {str(e)}. Check that you're using the correct module name from the allowed modules list: {', '.join(sorted(ALLOWED_MODULES.keys()))}"
+        logger.error(error_msg)
+        result["error"] = error_msg
+        result["stderr"] = stderr_buffer.getvalue() + f"\n{error_msg}"
+        return result
+    except Exception as e:
+        # General error handling
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        trace = traceback.format_exc()
+        logger.error(f"Error executing code: {error_msg}\n{trace}")
+        result["error"] = error_msg
+        result["stderr"] = stderr_buffer.getvalue() + f"\n{trace}"
+        return result
 
 
 def read_file(file_path):
@@ -414,3 +550,73 @@ def list_files(directory_path):
     except Exception as e:
         logger.error(f"Error listing directory {directory_path}: {str(e)}")
         return {"error": f"Error listing directory: {str(e)}"}
+
+
+def get_available_modules():
+    """
+    Returns information about available modules that can be used in code execution.
+    
+    Returns:
+        dict: Information about available modules organized by category
+    """
+    logger.info("Getting list of available modules")
+    
+    # Organize modules by category
+    module_info = {
+        "data_processing": [
+            {"name": "pandas", "description": "Data analysis and manipulation library"},
+            {"name": "numpy", "description": "Numerical computing with arrays and matrices"},
+            {"name": "matplotlib.pyplot", "description": "Data visualization library"}
+        ],
+        "standard_library": [
+            {"name": "math", "description": "Mathematical functions"},
+            {"name": "random", "description": "Random number generation"},
+            {"name": "statistics", "description": "Statistical functions"},
+            {"name": "datetime", "description": "Date and time manipulation"},
+            {"name": "calendar", "description": "Calendar-related functions"},
+            {"name": "collections", "description": "Specialized container datatypes"},
+            {"name": "itertools", "description": "Iterator functions for efficient looping"},
+            {"name": "functools", "description": "Higher-order functions"},
+            {"name": "re", "description": "Regular expressions"},
+            {"name": "csv", "description": "CSV file reading and writing"},
+            {"name": "json", "description": "JSON encoding and decoding"},
+            {"name": "io", "description": "Core tools for working with streams"},
+            {"name": "StringIO", "description": "In-memory text streams"},
+        ],
+        "utilities": [
+            {"name": "base64", "description": "Base16, Base32, Base64, Base85 data encodings"},
+            {"name": "hashlib", "description": "Secure hash and message digest algorithms"},
+            {"name": "time", "description": "Time access and conversions"},
+            {"name": "uuid", "description": "UUID objects according to RFC 4122"},
+            {"name": "urllib.parse", "description": "Parse URLs into components"},
+            {"name": "textwrap", "description": "Text wrapping and filling"},
+            {"name": "string", "description": "Common string operations"},
+            {"name": "copy", "description": "Shallow and deep copy operations"},
+        ],
+        "scientific": [
+            {"name": "scipy", "description": "Scientific computing (if installed)"},
+            {"name": "sklearn", "description": "Machine learning library (if installed)"},
+            {"name": "nltk", "description": "Natural language toolkit (if installed)"},
+            {"name": "seaborn", "description": "Statistical data visualization (if installed)"},
+            {"name": "plotly", "description": "Interactive visualizations (if installed)"},
+            {"name": "statsmodels", "description": "Statistical modeling (if installed)"}
+        ]
+    }
+    
+    # Check which optional scientific modules are actually available
+    available_scientific = []
+    for module in module_info["scientific"]:
+        module_name = module["name"]
+        if module_name in ALLOWED_MODULES and ALLOWED_MODULES[module_name] is not None:
+            available_scientific.append(module)
+    
+    # Update with only available scientific modules
+    module_info["scientific"] = available_scientific
+    
+    # Get a simple list of all available modules
+    all_available_modules = sorted(ALLOWED_MODULES.keys())
+    
+    return {
+        "categories": module_info,
+        "all_modules": all_available_modules
+    }

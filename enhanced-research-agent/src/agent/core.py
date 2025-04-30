@@ -19,8 +19,7 @@ from src.logger.agent_logger import setup_logger
 from src.logger.interaction_logger import (
     log_user_query, log_agent_response, log_function_call, log_function_result,
     log_plan_created, log_plan_step_execution, log_plan_step_result, log_plan_completed,
-    log_conversation_session_start, log_conversation_session_end, log_error,
-    log_reflection, log_refinement
+    log_conversation_session_start, log_conversation_session_end, log_error
 )
 
 # Setup logger for this module
@@ -41,8 +40,7 @@ class ResearchAgent:
         
         # Store the tool functions
         self.tool_functions = tool_functions
-        
-        # Load API key
+          # Load API key
         load_dotenv()
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
@@ -50,14 +48,21 @@ class ResearchAgent:
             raise ValueError("GOOGLE_API_KEY not found in environment variables.")
         genai.configure(api_key=api_key)
         
+        # Set safety settings to allow function calls
+        self.safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
+        ]
+        
         # Set default retry parameters
         self.max_retries = 3
         self.retry_delay = 1  # seconds
         
         # Create reflection evaluator for self-reflection and refinement
         self.reflection_evaluator = ReflectionEvaluator()
-        
-        # Enhanced system instruction
+          # Enhanced system instruction
         self.system_instruction = """You are a helpful research assistant specialized in scientific and coding topics. 
 You can execute code, read files, write files, list directory contents, search the web, and browse webpages.
 
@@ -68,6 +73,15 @@ When asked to perform calculations, data analysis, or file operations, use the a
 - Use 'list_files' to discover available files
 - Use 'search_duckduckgo' for web searches
 - Use 'browse_webpage' to browse specific URLs
+
+IMPORTANT: You must make only ONE function call at a time. If a task requires multiple function calls, make them in sequence, waiting for each call to complete before making the next one.
+
+IMPORTANT: When writing Python code for execution, you are limited to the following modules:
+- Data processing: pandas, numpy, matplotlib.pyplot
+- Standard library: math, random, statistics, datetime, calendar, collections
+- More standard library: itertools, functools, re, csv, json, io, StringIO
+- Utilities: base64, hashlib, time, uuid, urllib.parse, textwrap, string, copy
+- Scientific (if available): scipy, sklearn modules, nltk, seaborn, plotly, statsmodels
 
 For complex queries that involve multiple steps or require detailed research:
 - Create a step-by-step plan as a numbered list
@@ -132,6 +146,9 @@ Always provide clear explanations and analyze your results thoroughly."""
             
         candidate = response.candidates[0]
         
+        # Get all function calls (first one only for backward compatibility)
+        first_function_call = None
+        
         # Check for function calls
         for part in candidate.content.parts:
             if hasattr(part, 'function_call') and part.function_call:
@@ -139,8 +156,18 @@ Always provide clear explanations and analyze your results thoroughly."""
                 function_name = function_call.name
                 args = dict(function_call.args)
                 
+                # Save the first one for processing
+                if first_function_call is None:
+                    first_function_call = function_call
+                
                 logger.info(f"Function call detected: {function_name}")
                 log_function_call(function_name, args)
+                
+                # Only process the first function call to maintain compatibility
+                # with the current architecture
+                if function_call != first_function_call:
+                    logger.info(f"Skipping additional function call: {function_name} (will process first one only)")
+                    continue
                 
                 # Call the function
                 if function_name in self.tool_functions:
@@ -295,9 +322,17 @@ Always provide clear explanations and analyze your results thoroughly."""
             model_tier="standard"  # Use standard model for step execution
         )
         
-        function_call = get_function_call(response)
-
-        if function_call:
+        # Import the new multiple function call detector
+        from src.agent.utils import get_function_call, get_function_calls
+        
+        # Check for multiple function calls
+        function_calls = get_function_calls(response)
+        
+        if function_calls:
+            if len(function_calls) > 1:
+                logger.info(f"Multiple function calls detected ({len(function_calls)}) - processing first one only")
+                
+            # Process the first function call
             step_result = self.handle_function_call(response)
             # Extract text from the response
             result_text = get_text_response(step_result) if step_result else "No result for this step."
@@ -327,9 +362,23 @@ Always provide clear explanations and analyze your results thoroughly."""
         else:
             # No plan adjustment needed, result is usable
             return result_text
-    
+        
     def process_query(self, query):
-        """Process a user query with planning capabilities and self-reflection"""
+        """
+        Process a user query with planning capabilities and self-reflection.
+        
+        This method handles:
+        1. Continuing execution of an existing plan
+        2. Plan refinement when needed
+        3. Creating and executing new plans for complex queries
+        4. Direct execution of simple queries
+        
+        Args:
+            query: The user query string
+            
+        Returns:
+            str: The response to provide to the user
+        """
         logger.info(f"Processing query: {query}")
         log_user_query(query)
         final_response = ""
@@ -338,62 +387,16 @@ Always provide clear explanations and analyze your results thoroughly."""
         if self.plan_manager.has_active_plan():
             # Check if the plan needs refinement based on previous step evaluation
             if self.plan_manager.plan_needs_refinement:
-                logger.info("Plan needs refinement based on previous step evaluation")
-                
-                # Get executed steps with their results for context
-                executed_steps = self.plan_manager.get_executed_steps_with_results()
-                
-                # Generate refined plan steps for remaining work
-                refined_steps = self.reflection_evaluator.generate_plan_refinement(
-                    goal=self.plan_manager.original_goal,
-                    current_plan=self.plan_manager.current_plan,
-                    executed_steps=executed_steps,
-                    issues=self.plan_manager.refinement_issues
-                )
-                
-                # Apply the refinement to the current plan
-                self.plan_manager.refine_plan(refined_steps)
-                
-                # Inform user about the plan refinement
-                plan_refinement_message = "I've refined the plan based on my evaluation of previous steps:\n"
-                for i, step in enumerate(refined_steps, self.plan_manager.current_step_index + 1):
-                    plan_refinement_message += f"{i}. {step}\n"
-                logger.info(f"Plan refined with {len(refined_steps)} new steps")
-                
-                return plan_refinement_message
+                # Refine the plan using the new helper method
+                return self._handle_plan_refinement()
             
             # Execute the next step in the existing plan
-            step_instruction = self.plan_manager.current_step()
-            step_count = self.plan_manager.current_step_index + 1
-            total_steps = len(self.plan_manager.current_plan)
-            logger.info(f"Continuing Plan. Executing Step {step_count}/{total_steps}: {step_instruction}")
-            log_plan_step_execution(step_count, total_steps, step_instruction)
-
-            step_result = self._execute_step(step_instruction)
-            # Store result with context for final summary
-            self.plan_manager.store_step_result(step_instruction, step_result)
-            log_plan_step_result(step_count, step_result)
-            self.plan_manager.advance_to_next_step()
+            step_result = self._handle_active_plan_execution()
 
             # Check if plan is now complete
             if not self.plan_manager.has_active_plan():
-                logger.info("Plan finished. Generating summary.")
-                # Generate summary prompt and send to model
-                summary_prompt = self.plan_manager.generate_plan_summary_prompt()
-                
-                # Use reflection for final summary with advanced model
-                response = self.send_message_with_retry(
-                    message=summary_prompt,
-                    use_reflection=True,
-                    reflection_context={"goal": self.plan_manager.original_goal, "step_description": "Generate final summary"},
-                    model_tier="advanced"  # Use advanced model for final summary
-                )
-                
-                final_response = get_text_response(response)
-                # Reset plan state
-                logger.info("Resetting plan state.")
-                log_plan_completed(self.plan_manager.original_goal)
-                self.plan_manager.reset_plan()
+                # Handle plan completion using the new helper method
+                return self._handle_plan_completion(query)
             else:
                 # Plan not finished, inform user about the next step
                 next_step_instruction = self.plan_manager.next_step()
@@ -410,167 +413,67 @@ Always provide clear explanations and analyze your results thoroughly."""
             # Check if query requires detailed info to enforce planning mode
             if self.plan_manager.requires_detailed_info(query):
                 # Enforce the model to create a plan
-                planning_prompt = f"This query requires a methodical research approach: '{query}'\nYou MUST create a multi-step plan. Present your plan as a numbered list including specific steps for searching, data gathering, and analysis. Do not call functions directly."
-                logger.info("Query appears to need detailed investigation. Enforcing planning mode.")
+                parsed_plan, text_response, response = self._create_plan_for_complex_query(query)
                 
-                # Use standard model for planning with reflection
-                response = self.send_message_with_retry(
-                    message=planning_prompt,
-                    use_reflection=True,
-                    reflection_context={"goal": query, "step_description": "Create a detailed research plan"},
-                    model_tier="standard"
-                )
+                if not parsed_plan:
+                    final_response = "I apologize, but I am unable to create a detailed plan for this query. Please try refining your question or providing more context."
+                    logger.warning(final_response)
+                    return final_response
                 
                 # Check for a plan in the response
-                text_response = get_text_response(response)
-                logger.info(f"LLM response: {text_response}")
-                # Use the enhanced plan extraction method from PlanManager
-                parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)
-                
-                if not parsed_plan and not get_function_call(response):
-                    # Try again with stronger enforcement
-                    logger.info("No plan detected in first attempt. Trying again with stronger enforcement.")                    
-                    planning_prompt = f"For this query: '{query}'\nYou MUST create a step-by-step plan as a numbered list. Do not answer directly. Do not call functions directly. First plan out the steps, then we will execute them one by one."
-                    
-                    # Try with advanced model for better planning
-                    response = self.send_message_with_retry(
-                        message=planning_prompt,
-                        use_reflection=True,
-                        reflection_context={"goal": query, "step_description": "Create a detailed research plan"},
-                        model_tier="advanced"
-                    )
-                    
-                    text_response = get_text_response(response)
-                    logger.info(f"LLM response: {text_response}")                    
-                    parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)            
-            else:                
-                # Send the query as a message to the model
-                # Use light model for simple queries
-                response = self.send_message_with_retry(
-                    message=query,
-                    use_reflection=True,
-                    reflection_context={"goal": query, "step_description": query},
-                    model_tier="light"
-                )
-                
-                text_response = get_text_response(response)
-                parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)
-                
-            function_call = get_function_call(response)
-
-            if function_call and not self.plan_manager.requires_detailed_info(query):
-                # Only allow direct function calls for simple queries
-                logger.info("Simple query - LLM calling function directly (no plan).")
-                function_response = self.handle_function_call(response)
-                final_response = get_text_response(function_response)
-                self.plan_manager.original_goal = None  # Clear goal as it was handled directly
-            elif function_call:
-                # For complex queries with function calls, convert to a plan
-                logger.info("Complex query needs a plan but got function call. Creating synthetic plan.")
-                function_name = function_call.name
-                args = dict(function_call.args)
-                # Create a synthetic plan with the function call as the first step and additional steps
-                synthetic_plan = [f"Search for information about {args.get('query', query)}"]
-                if function_name == "search_duckduckgo":
-                    synthetic_plan.append(f"Browse relevant websites about {args.get('query', query)}")
-                synthetic_plan.append(f"Synthesize findings into an explanation about {query}")
-                
-                # Store the plan
-                self.plan_manager.set_new_plan(synthetic_plan, query)
-                log_plan_created(synthetic_plan, query)
-                
-                logger.info("Created synthetic plan:")
-                for i, step in enumerate(synthetic_plan):
-                    logger.info(f"   {i+1}. {step}")
-                
-                # Execute first step using the function call
-                logger.info(f"Executing synthetic plan Step 1 using function call {function_name}")
-                log_plan_step_execution(1, len(synthetic_plan), synthetic_plan[0])
-                function_response = self.handle_function_call(response)
-                step_result = get_text_response(function_response)
-                self.plan_manager.store_step_result(synthetic_plan[0], step_result)
-                log_plan_step_result(1, step_result)
-                self.plan_manager.advance_to_next_step()
-                
-                # Continue with the next step immediately (auto-execution of plan)
-                return self.process_query("continue")  # Pass dummy input to trigger next step execution
-            elif parsed_plan:
-                logger.info("LLM generated a plan:")
-                for i, step in enumerate(parsed_plan):
-                    logger.info(f"   {i+1}. {step}")
-
-                # Store the plan
-                self.plan_manager.set_new_plan(parsed_plan, query)
-                log_plan_created(parsed_plan, query)
-
-                # Now, execute step 1 immediately
+                logger.info("Plan created successfully.")                # Execute first step immediately
                 first_step_instruction = self.plan_manager.current_step()
-                logger.info(f"Plan detected. Executing Step 1: {first_step_instruction}")
+                if first_step_instruction is None:
+                    # Handle case where step content is None - use the first step from the parsed plan
+                    if parsed_plan and len(parsed_plan) > 0:
+                        first_step_instruction = parsed_plan[0]
+                        logger.info(f"Retrieved first step from parsed_plan: {first_step_instruction}")
+                    else:
+                        first_step_instruction = "Execute the first step of the plan"
+                        logger.warning(f"No step content available, using default: {first_step_instruction}")
+                
+                logger.info(f"Executing Step 1: {first_step_instruction}")
                 log_plan_step_execution(1, len(parsed_plan), first_step_instruction)
 
                 # Store the plan text itself as the first part of the response
-                plan_announcement = text_response + "\n\n"  # Add spacing
-
-                # Execute step 1
+                plan_announcement = text_response + "\n\n"  # Add spacing                # Execute step 1
                 step_result = self._execute_step(first_step_instruction)
                 self.plan_manager.store_step_result(first_step_instruction, step_result)
                 log_plan_step_result(1, step_result)
                 self.plan_manager.advance_to_next_step()
 
-                # Check if plan is now complete (only 1 step)
-                if not self.plan_manager.has_active_plan():
-                    logger.info("One-step plan finished. Generating summary.")                    
-                    summary_prompt = self.plan_manager.generate_one_step_summary_prompt()
-                    
-                    # Use advanced model for final summary with reflection
-                    response = self.send_message_with_retry(
-                        message=summary_prompt,
-                        use_reflection=True,
-                        reflection_context={"goal": query, "step_description": "Generate summary for one-step plan"},
-                        model_tier="advanced"
-                    )
-                    
-                    final_response = plan_announcement + get_text_response(response)
-                    # Reset plan state
-                    logger.info("Resetting plan state.")
-                    log_plan_completed(self.plan_manager.original_goal)
-                    self.plan_manager.reset_plan()
+                # Always continue with the plan after step 1, never immediately generate a summary
+                # Single-step plans will be handled by _handle_plan_completion when all steps finish
+                next_step_instruction = self.plan_manager.next_step()
+                
+                # Check if we reached the end of the plan
+                if next_step_instruction is None:
+                    logger.info("Plan finished after first step. Generating summary.")
+                    return self._handle_plan_completion(query)
                 else:
                     # Plan not finished, inform user about the next step
-                    next_step_instruction = self.plan_manager.next_step()
                     final_response = f"{plan_announcement}Finished Step 1. Result:\n{step_result}\n\n---> Now proceeding to Step {self.plan_manager.current_step_index + 1}: {next_step_instruction}"
-            else:
-                # No plan, no function call, treat as single-step plan
-                logger.info("No plan or function call detected. Treating as single-step plan.")
-                single_step_plan = [f"{query}"]
-                self.plan_manager.set_new_plan(single_step_plan, query)
-                log_plan_created(single_step_plan, query)
-                
-                first_step_instruction = self.plan_manager.current_step()
-                logger.info(f"Single-step plan detected. Executing: {first_step_instruction}")
-                log_plan_step_execution(1, 1, first_step_instruction)
-                
-                step_result = self._execute_step(first_step_instruction)
-                self.plan_manager.store_step_result(first_step_instruction, step_result)
-                log_plan_step_result(1, step_result)
-                self.plan_manager.advance_to_next_step()
-                
-                # Generate summary for single-step plan
-                summary_prompt = self.plan_manager.generate_one_step_summary_prompt()
-                
-                # Use standard model with reflection for simple summaries
-                response = self.send_message_with_retry(
-                    message=summary_prompt,
-                    use_reflection=True,
-                    reflection_context={"goal": query, "step_description": "Generate summary for simple query"},
-                    model_tier="standard"
-                )
-                
-                final_response = get_text_response(response)
-                logger.info("Resetting plan state.")
-                log_plan_completed(self.plan_manager.original_goal)
-                self.plan_manager.reset_plan()
+            else:                
+                # Send the query as a message to the model
+                parsed_plan, text_response, response = self._process_simple_query(query)
 
+                function_call = get_function_call(response)
+
+                if function_call and not self.plan_manager.requires_detailed_info(query):
+                    # Only allow direct function calls for simple queries
+                    logger.info("Simple query - LLM calling function directly (no plan).")
+                    function_response = self.handle_function_call(response)
+                    final_response = get_text_response(function_response)
+                    self.plan_manager.original_goal = None  # Clear goal as it was handled directly
+                elif function_call:
+                    # For complex queries with function calls, convert to a plan
+                    return self._create_and_execute_synthetic_plan(query, function_call, response)
+                elif parsed_plan:
+                    return self._execute_parsed_plan(parsed_plan, text_response, query)
+                else:
+                    # No plan, no function call, treat as single-step plan
+                    return self._execute_single_step_plan(query)
+        
         # Log the agent's response
         log_agent_response(final_response)
         return final_response if final_response else "Sorry, I couldn't generate a response."
@@ -670,3 +573,281 @@ Always provide clear explanations and analyze your results thoroughly."""
             True if successful, False otherwise
         """
         return self.model_manager.switch_model(model_tier, self.system_instruction)
+    
+    def _handle_plan_refinement(self):
+        """
+        Refine the current plan based on previous step evaluation.
+        
+        Returns:
+            str: A message describing the plan refinement
+        """
+        logger.info("Plan needs refinement based on previous step evaluation")
+        
+        # Get executed steps with their results for context
+        executed_steps = self.plan_manager.get_executed_steps_with_results()
+        
+        # Generate refined plan steps for remaining work
+        refined_steps = self.reflection_evaluator.generate_plan_refinement(
+            goal=self.plan_manager.original_goal,
+            current_plan=self.plan_manager.current_plan,
+            executed_steps=executed_steps,
+            issues=self.plan_manager.refinement_issues
+        )
+        
+        # Apply the refinement to the current plan
+        self.plan_manager.refine_plan(refined_steps)
+        
+        # Inform user about the plan refinement
+        plan_refinement_message = "I've refined the plan based on my evaluation of previous steps:\n"
+        for i, step in enumerate(refined_steps, self.plan_manager.current_step_index + 1):
+            plan_refinement_message += f"{i}. {step}\n"
+        logger.info(f"Plan refined with {len(refined_steps)} new steps")
+        
+        return plan_refinement_message
+
+    def _handle_active_plan_execution(self):
+        """
+        Execute the next step in an active plan.
+        
+        Returns:
+            str: The response to provide to the user
+        """
+        step_instruction = self.plan_manager.current_step()
+        step_count = self.plan_manager.current_step_index + 1
+        total_steps = len(self.plan_manager.current_plan)
+        
+        logger.info(f"Executing Plan Step {step_count}/{total_steps}: {step_instruction}")
+        log_plan_step_execution(step_count, total_steps, step_instruction)
+
+        step_result = self._execute_step(step_instruction)
+        self.plan_manager.store_step_result(step_instruction, step_result)
+        log_plan_step_result(step_count, step_result)
+        self.plan_manager.advance_to_next_step()
+
+        return step_result
+    
+    def _handle_plan_completion(self, query=None):
+        """
+        Handle plan completion by generating a summary.
+        
+        Args:
+            query: The original query if available
+            
+        Returns:
+            str: The final summary response
+        """
+        logger.info("Plan finished. Generating summary.")
+        
+        # Generate summary prompt based on plan type
+        if self.plan_manager.is_one_step_plan():
+            summary_prompt = self.plan_manager.generate_one_step_summary_prompt()
+            reflection_step_description = "Generate summary for simple query"
+        else:
+            summary_prompt = self.plan_manager.generate_plan_summary_prompt()
+            reflection_step_description = "Generate final summary"
+        
+        # The goal is either the stored original goal or the current query
+        reflection_goal = self.plan_manager.original_goal or query
+        
+        # Use reflection for final summary with advanced model
+        response = self.send_message_with_retry(
+            message=summary_prompt,
+            use_reflection=True,
+            reflection_context={
+                "goal": reflection_goal, 
+                "step_description": reflection_step_description
+            },
+            model_tier="advanced"  # Use advanced model for final summary
+        )
+        
+        final_response = get_text_response(response)
+        
+        # Reset plan state
+        logger.info("Resetting plan state.")
+        log_plan_completed(self.plan_manager.original_goal)
+        self.plan_manager.reset_plan()
+        
+        return final_response
+    
+    def _create_plan_for_complex_query(self, query):
+        """
+        Create a plan for a complex query that needs detailed investigation.
+        
+        Args:
+            query: The user query
+            
+        Returns:
+            tuple: (parsed_plan, text_response, model_response)
+        """
+        logger.info("Query appears to need detailed investigation. Enforcing planning mode.")
+        
+        # Enforce the model to create a plan
+        planning_prompt = f"This query requires a methodical research approach: '{query}'\nYou MUST create a multi-step plan. Present your plan as a numbered list including specific steps for searching, data gathering, and analysis. Do not call functions directly."
+        
+        # Use standard model for planning with reflection
+        response = self.send_message_with_retry(
+            message=planning_prompt,
+            use_reflection=True,
+            reflection_context={"goal": query, "step_description": "Create a detailed research plan"},
+            model_tier="standard"
+        )
+        
+        # Check for a plan in the response
+        text_response = get_text_response(response)
+        logger.info(f"LLM planning response: {text_response}")
+        # Extract plan from response
+        parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)
+        
+        # If no plan was found and no function call, try again with stronger enforcement
+        if not parsed_plan and not get_function_call(response):
+            logger.info("No plan detected in first attempt. Trying again with stronger enforcement.")                    
+            planning_prompt = f"For this query: '{query}'\nYou MUST create a step-by-step plan as a numbered list. Do not answer directly. Do not call functions directly. First plan out the steps, then we will execute them one by one."
+            
+            # Try with advanced model for better planning
+            response = self.send_message_with_retry(
+                message=planning_prompt,
+                use_reflection=True,
+                reflection_context={"goal": query, "step_description": "Create a detailed research plan"},
+                model_tier="advanced"
+            )
+            
+            text_response = get_text_response(response)
+            logger.info(f"Second planning response: {text_response}")                    
+            parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)
+        
+        return parsed_plan, text_response, response
+    
+    def _process_simple_query(self, query):
+        """
+        Process a simple query without enforcing planning.
+        
+        Args:
+            query: The user query
+            
+        Returns:
+            tuple: (parsed_plan, text_response, model_response)
+        """
+        logger.info("Processing as a simple query")
+        
+        # Use light model for simple queries
+        response = self.send_message_with_retry(
+            message=query,
+            use_reflection=True,
+            reflection_context={"goal": query, "step_description": query},
+            model_tier="light"
+        )
+        
+        text_response = get_text_response(response)
+        parsed_plan = self.plan_manager.extract_plan_from_llm_response(text_response)
+        
+        return parsed_plan, text_response, response
+        
+    def _create_and_execute_synthetic_plan(self, query, function_call, response):
+        """
+        Create and begin executing a synthetic plan from a function call.
+        
+        Args:
+            query: The user query
+            function_call: The function call object
+            response: The model response
+            
+        Returns:
+            str: The response from the plan execution
+        """
+        logger.info("Complex query needs a plan but got function call. Creating synthetic plan.")
+        function_name = function_call.name
+        args = dict(function_call.args)
+        
+        # Create a synthetic plan with the function call as the first step and additional steps
+        synthetic_plan = [f"Search for information about {args.get('query', query)}"]
+        if function_name == "search_duckduckgo":
+            synthetic_plan.append(f"Browse relevant websites about {args.get('query', query)}")
+        synthetic_plan.append(f"Synthesize findings into an explanation about {query}")
+        
+        # Store the plan
+        self.plan_manager.set_new_plan(synthetic_plan, query)
+        log_plan_created(synthetic_plan, query)
+        
+        logger.info("Created synthetic plan:")
+        for i, step in enumerate(synthetic_plan):
+            logger.info(f"   {i+1}. {step}")
+        
+        # Execute first step using the function call
+        logger.info(f"Executing synthetic plan Step 1 using function call {function_name}")
+        log_plan_step_execution(1, len(synthetic_plan), synthetic_plan[0])
+        function_response = self.handle_function_call(response)
+        step_result = get_text_response(function_response)
+        self.plan_manager.store_step_result(synthetic_plan[0], step_result)
+        log_plan_step_result(1, step_result)
+        self.plan_manager.advance_to_next_step()
+        
+        # Continue with the next step immediately (auto-execution of plan)
+        return self.process_query("continue")  # Pass dummy input to trigger next step execution
+        
+    def _execute_parsed_plan(self, parsed_plan, text_response, query):
+        """
+        Execute a plan that was parsed from the model response.
+        
+        Args:
+            parsed_plan: The list of steps in the plan
+            text_response: The raw text response from the model
+            query: The user query
+            
+        Returns:
+            str: The response after executing the first step
+        """
+        logger.info("LLM generated a plan:")
+        for i, step in enumerate(parsed_plan):
+            logger.info(f"   {i+1}. {step}")
+
+        # Store the plan
+        self.plan_manager.set_new_plan(parsed_plan, query)
+        log_plan_created(parsed_plan, query)
+
+        # Execute step 1 immediately
+        first_step_instruction = self.plan_manager.current_step()
+        logger.info(f"Plan detected. Executing Step 1: {first_step_instruction}")
+        log_plan_step_execution(1, len(parsed_plan), first_step_instruction)
+
+        # Store the plan text itself as the first part of the response
+        plan_announcement = text_response + "\n\n"  # Add spacing
+
+        # Execute step 1
+        step_result = self._execute_step(first_step_instruction)
+        self.plan_manager.store_step_result(first_step_instruction, step_result)
+        log_plan_step_result(1, step_result)
+        self.plan_manager.advance_to_next_step()
+
+        # Check if plan is now complete (only 1 step)
+        if not self.plan_manager.has_active_plan():
+            return plan_announcement + self._handle_plan_completion(query)
+        else:
+            # Plan not finished, inform user about the next step
+            next_step_instruction = self.plan_manager.next_step()
+            return f"{plan_announcement}Finished Step 1. Result:\n{step_result}\n\n---> Now proceeding to Step {self.plan_manager.current_step_index + 1}: {next_step_instruction}"
+    
+    def _execute_single_step_plan(self, query):
+        """
+        Create and execute a single step plan for a simple query.
+        
+        Args:
+            query: The user query
+            
+        Returns:
+            str: The final response
+        """
+        logger.info("No plan or function call detected. Treating as single-step plan.")
+        single_step_plan = [f"{query}"]
+        self.plan_manager.set_new_plan(single_step_plan, query)
+        log_plan_created(single_step_plan, query)
+        
+        first_step_instruction = self.plan_manager.current_step()
+        logger.info(f"Single-step plan detected. Executing: {first_step_instruction}")
+        log_plan_step_execution(1, 1, first_step_instruction)
+        
+        step_result = self._execute_step(first_step_instruction)
+        self.plan_manager.store_step_result(first_step_instruction, step_result)
+        log_plan_step_result(1, step_result)
+        self.plan_manager.advance_to_next_step()
+        
+        return self._handle_plan_completion(query)

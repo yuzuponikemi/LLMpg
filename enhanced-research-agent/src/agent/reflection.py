@@ -20,7 +20,7 @@ class ReflectionEvaluator:
         """Initialize the reflection evaluator with a Gemini model"""
         self.model = genai.GenerativeModel(model_name="gemini-1.5-flash")
         logger.info("ReflectionEvaluator initialized")
-    
+        
     def evaluate_result(self, goal, step_description, result):
         """
         Evaluate if a step's result adequately addresses the requirement.
@@ -37,6 +37,11 @@ class ReflectionEvaluator:
             - recommendation: Recommended action ("proceed", "retry", "refine_plan")
             - justification: Explanation of the evaluation
         """
+        # Skip reflection for query evaluation or plan creation steps
+        if "Create a detailed research plan" in step_description:
+            logger.info(f"Skipping reflection for planning step: {step_description[:50]}...")
+            return self._create_default_evaluation("proceed")
+            
         logger.info(f"Evaluating result for step: {step_description[:50]}...")
         
         # Create the evaluation prompt
@@ -142,7 +147,7 @@ Provide your refinement in the following format:
             refinement = self._parse_refinement_response(refinement_text)
             
             # Log the refinement
-            log_refinement(goal, step_description, current_result, refinement)
+            log_refinement(step_description, refinement, issues)
             
             return refinement
             
