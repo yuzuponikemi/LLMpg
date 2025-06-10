@@ -1,0 +1,5 @@
+What are the key applications of machine learning in healthcare?
+Explain the concept of neural networks in simple terms.
+How do I use the Google RAG tool to find information about quantum computing?
+Index the documents in the test/rag_test_data directory into a collection called "test_collection".
+Using the test_collection, what are the main components of natural language processing?

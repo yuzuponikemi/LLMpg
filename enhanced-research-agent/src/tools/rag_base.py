@@ -4,6 +4,7 @@ Base class and implementations for RAG (Retrieval-Augmented Generation) tools us
 
 import os
 import json
+import uuid
 from typing import Dict, List, Optional, Union, Any
 from abc import ABC, abstractmethod
 
@@ -37,7 +38,7 @@ class BaseRAGTool(ABC):
         api_key: Optional[str] = None,
         timeout: int = 10,
         vector_size: int = 1536,  # Default for most common embedding models
-        distance: str = "COSINE"
+        distance: str = "Cosine"  # Changed from "COSINE" to "Cosine"
     ):
         """
         Initialize the base RAG tool.
@@ -104,13 +105,12 @@ class BaseRAGTool(ABC):
             
             if self.collection_name not in collection_names:
                 logger.info(f"Creating collection: {self.collection_name}")
-                
-                # Create the collection with appropriate settings
+                  # Create the collection with appropriate settings
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(
                         size=self.vector_size,
-                        distance=Distance(self.distance),
+                        distance=self.distance,
                     )
                 )
                 logger.info(f"Collection '{self.collection_name}' created successfully")
@@ -166,39 +166,25 @@ class BaseRAGTool(ABC):
         try:
             # Generate embedding for the document
             embedding = self.embed_text(text)
-            
-            # Add document to the collection
+              # Add document to the collection
             if id is None:
-                # Let Qdrant auto-generate an ID
-                result = self.client.upsert(
-                    collection_name=self.collection_name,
-                    points=[
-                        models.PointStruct(
-                            vector=embedding,
-                            payload={
-                                "text": text,
-                                **metadata
-                            }
-                        )
-                    ]
-                )
-                # Get the generated ID
-                id = result.upserted_points[0]
-            else:
-                # Use provided ID
-                self.client.upsert(
-                    collection_name=self.collection_name,
-                    points=[
-                        models.PointStruct(
-                            id=id,
-                            vector=embedding,
-                            payload={
-                                "text": text,
-                                **metadata
-                            }
-                        )
-                    ]
-                )
+                # Generate a UUID for the document
+                id = str(uuid.uuid4())
+                
+            # Add the document with the ID
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=[
+                    models.PointStruct(
+                        id=id,
+                        vector=embedding,
+                        payload={
+                            "text": text,
+                            **metadata
+                        }
+                    )
+                ]
+            )
             
             logger.info(f"Added document with ID {id} to collection {self.collection_name}")
             return id

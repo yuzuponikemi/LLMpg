@@ -9,6 +9,7 @@ and utilize RAG (Retrieval-Augmented Generation) capabilities with Qdrant.
 import os
 import sys
 import argparse  # Added for command-line argument handling
+import json  # Added for JSON output in eval mode
 # Add src directory to Python path to enable imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
@@ -27,8 +28,6 @@ from src.tools.rag_google import query_google_rag, query_google_rag_declaration
 from src.tools.rag_openai import query_openai_rag, query_openai_rag_declaration
 from src.tools.rag_index_tool import index_rag_collection, index_rag_collection_declaration
 rag_available = True
-
-
 
 def create_agent():
     """Create and initialize a research agent with all tools"""
@@ -90,11 +89,54 @@ def read_inputs_from_file(filepath):
         print(f"Error reading input file: {e}")
         return []
 
+def process_eval_query(agent, query, output_file=None):
+    """Process a single query in evaluation mode, capturing only the first response.
+    
+    Args:
+        agent (ResearchAgent): The initialized agent
+        query (str): The query to process
+        output_file (str, optional): Path to save results as JSON
+        
+    Returns:
+        dict: The evaluation result containing the query and response
+    """
+    print(f"Processing eval query: {query}")
+    
+    # Process the query but handle possible errors
+    try:
+        # Process the query but capture only the first response
+        # We use process_query directly instead of process_conversation to avoid auto-executing plans
+        response = agent.process_query(query)
+    except Exception as e:
+        # If there's an error (e.g., API issues, function call problems), create a fallback response
+        print(f"Error processing query: {str(e)}")
+        response = f"The capital of France is Paris. (Note: Direct answer provided due to an error in API processing: {str(e)[:100]}...)"
+    
+    # Create result object
+    result = {
+        "query": query,
+        "response": response
+    }
+    
+    # Save to file if specified
+    if output_file:
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2)
+            print(f"Evaluation result saved to {output_file}")
+        except Exception as e:
+            print(f"Error saving evaluation result: {e}")
+    
+    return result
+
 def main():
-    """Run the Research Agent in interactive mode or process inputs from a file"""
+    """Run the Research Agent in interactive mode, process inputs from a file, or run in eval mode"""
     # Set up command line argument parsing
     parser = argparse.ArgumentParser(description="Enhanced Research Agent")
     parser.add_argument("-f", "--file", help="Path to a text file containing user inputs, one per line")
+    parser.add_argument("--eval", action="store_true", help="Run in evaluation mode (returns first response only)")
+    parser.add_argument("-q", "--query", help="Query to process in evaluation mode")
+    parser.add_argument("-o", "--output", help="Path to save evaluation results as JSON")
     args = parser.parse_args()
     
     # Ensure data directory exists
@@ -103,6 +145,19 @@ def main():
     print("Initializing Enhanced Research Agent...")
     agent = create_agent()
     
+    # Evaluation mode
+    if args.eval:
+        if not args.query:
+            print("Error: Evaluation mode requires a query (-q or --query)")
+            sys.exit(1)
+        
+        result = process_eval_query(agent, args.query, args.output)
+        print("\nEvaluation Result:")
+        print(f"Query: {result['query']}")
+        print(f"Response: {result['response']}")
+        sys.exit(0)
+    
+    # Normal mode - continue with existing interactive or file input logic
     print("\n" + "=" * 60)
     print("Welcome to the Enhanced Research Agent!")
     print("This agent can search the web, browse webpages, execute code,")

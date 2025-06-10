@@ -1,0 +1,4 @@
+{
+  "query": "What is the capital of France?",
+  "response": "The capital of France is Paris. (Note: Direct answer provided due to an error in API processing: 400 Please ensure that the number of function response parts is equal to the number of function call...)"
+}

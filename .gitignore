@@ -23,5 +23,8 @@ logs/
 enhanced-research-agent/examples/logs
 enhanced-research-agent/examples/test_results
 enhanced-research-agent/examples/data
+enhanced-research-agent/test/test_results
+enhanced-research-agent/qdrant_data
 
+# Environment variables and API keys
 .env

@@ -1,3 +1,12 @@
-what is the distance between kyoto and tokyo
-Tell 5 years old kid about neural networks 
-bye
+# RAG Test Queries
+
+## Indexing Query:
+Please index the documents in the directory 'C:\Users\yuzup\source\repos\LLMpg\enhanced-research-agent\test\rag_test_data' into a collection called 'manual_rag_test' using Google embeddings.
+
+## Test Queries:
+1. Using the 'manual_rag_test' collection, what are the different types of machine learning?
+
+2. Using the 'manual_rag_test' collection, explain the concept of superposition in quantum computing.
+
+3. Using the 'manual_rag_test' collection, what are some applications of natural language processing?
+

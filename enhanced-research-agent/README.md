@@ -14,6 +14,7 @@ A powerful AI research assistant capable of web searches, webpage browsing, code
   - Create searchable knowledge bases from documents and code
   - Query collections using Google or OpenAI embeddings
   - Custom embedding models for different document types
+- **Evaluation Mode**: Run the agent with specific test prompts and capture the first response for automated testing
 
 ## Project Structure
 
@@ -26,6 +27,9 @@ enhanced-research-agent/
 ├── data/              # Sample data files
 ├── logs/              # Log output files
 ├── examples/          # Example scripts
+├── test/              # Test scripts and data
+│   ├── rag_test_data/ # Test data for RAG tests
+│   └── test_results/  # Test results
 ├── main.py            # Main entry point
 └── requirements.txt   # Project dependencies
 ```
@@ -75,6 +79,26 @@ python main.py
 
 This starts a conversation where you can ask questions and the agent will respond.
 
+### File Input Mode
+
+Run the agent with inputs from a file:
+
+```
+python main.py -f inputs.txt
+```
+
+The file should contain one query per line.
+
+### Evaluation Mode
+
+Run the agent in evaluation mode to test with a specific prompt and capture only the first response:
+
+```
+python main.py --eval --query "Your test query here" --output "results.json"
+```
+
+This is useful for automated testing and benchmarking.
+
 ### Example Queries
 
 The agent can handle a wide range of queries, including:
@@ -107,6 +131,12 @@ The agent can handle a wide range of queries, including:
    Compare different sorting algorithms and their time complexities
    ```
 
+6. **RAG Queries**:
+   ```
+   Index the documents in the directory 'docs' into a collection called 'my_docs'
+   Using the 'my_docs' collection, what are the key concepts of machine learning?
+   ```
+
 ## Advanced Features
 
 ### Multi-step Planning
@@ -128,10 +158,26 @@ The agent can use the following tools:
 - `read_file`: Access file contents
 - `write_file`: Save data to a file
 - `list_files`: Get directory listings
+- `query_google_rag`: Retrieve information using Google embeddings
+- `query_openai_rag`: Retrieve information using OpenAI embeddings
+- `index_rag_collection`: Create knowledge bases from documents
+
+### Automated Testing
+
+The agent supports an evaluation mode that allows external programs to:
+- Send test prompts
+- Capture only the first response (without executing multi-step plans)
+- Save results in JSON format for analysis
+
+See the `test/test_agent_eval_mode.py` script for examples of how to use this feature.
 
 ## Examples
 
 See the `examples/` directory for example scripts demonstrating various capabilities.
+
+## Testing
+
+See the `test/RAG_TESTING_GUIDE.md` for information on testing the RAG capabilities.
 
 ## Logging
 
