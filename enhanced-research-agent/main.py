@@ -2,7 +2,8 @@
 Enhanced Research Agent - Main entry point
 
 This script provides an interactive interface to the Enhanced Research Agent,
-which can search the web, browse webpages, execute code, and perform file operations.
+which can search the web, browse webpages, execute code, perform file operations,
+and utilize RAG (Retrieval-Augmented Generation) capabilities with Qdrant.
 """
 
 import os
@@ -21,9 +22,17 @@ from src.tools.execution import (
     list_files, list_files_declaration,
     get_available_modules, get_available_modules_declaration
 )
+# Import RAG tools
+from src.tools.rag_google import query_google_rag, query_google_rag_declaration
+from src.tools.rag_openai import query_openai_rag, query_openai_rag_declaration
+from src.tools.rag_index_tool import index_rag_collection, index_rag_collection_declaration
+rag_available = True
+
+
 
 def create_agent():
-    """Create and initialize a research agent with all tools"""    # Tool function mapping
+    """Create and initialize a research agent with all tools"""
+    # Tool function mapping
     tool_functions = {
         "search_duckduckgo": search_duckduckgo,
         "browse_webpage": browse_webpage,
@@ -42,8 +51,24 @@ def create_agent():
         read_file_declaration,
         write_file_declaration,
         list_files_declaration,
-        get_available_modules_declaration
+        get_available_modules_declaration,
     ]
+    
+    # Add RAG tools if available
+    if rag_available:
+        # Add RAG tool functions
+        tool_functions.update({
+            "query_google_rag": query_google_rag,
+            "query_openai_rag": query_openai_rag,
+            "index_rag_collection": index_rag_collection,
+        })
+        
+        # Add RAG function declarations
+        function_declarations.extend([
+            query_google_rag_declaration,
+            query_openai_rag_declaration,
+            index_rag_collection_declaration
+        ])
     
     # Create the agent
     return ResearchAgent(tool_functions, function_declarations)
@@ -82,6 +107,10 @@ def main():
     print("Welcome to the Enhanced Research Agent!")
     print("This agent can search the web, browse webpages, execute code,")
     print("read/write files, and handle data analysis tasks.")
+    if rag_available:
+        print("RAG capabilities are ENABLED - you can use vector search and indexing.")
+    else:
+        print("RAG capabilities are DISABLED - run 'pip install -r requirements.txt' to enable.")
     print("Type 'exit', 'quit', or 'bye' to end the conversation.")
     print("=" * 60 + "\n")
     

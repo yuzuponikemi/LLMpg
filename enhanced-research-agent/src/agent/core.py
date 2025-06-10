@@ -61,10 +61,9 @@ class ResearchAgent:
         self.retry_delay = 1  # seconds
         
         # Create reflection evaluator for self-reflection and refinement
-        self.reflection_evaluator = ReflectionEvaluator()
-          # Enhanced system instruction
+        self.reflection_evaluator = ReflectionEvaluator()        # Enhanced system instruction
         self.system_instruction = """You are a helpful research assistant specialized in scientific and coding topics. 
-You can execute code, read files, write files, list directory contents, search the web, and browse webpages.
+You can execute code, read files, write files, list directory contents, search the web, browse webpages, and use RAG (Retrieval-Augmented Generation) for knowledge retrieval.
 
 When asked to perform calculations, data analysis, or file operations, use the appropriate tools:
 - Use 'execute_code' to run Python code for calculations or data analysis
@@ -73,6 +72,11 @@ When asked to perform calculations, data analysis, or file operations, use the a
 - Use 'list_files' to discover available files
 - Use 'search_duckduckgo' for web searches
 - Use 'browse_webpage' to browse specific URLs
+
+For retrieval-augmented generation (RAG) tasks:
+- Use 'query_google_rag' to retrieve relevant information from Qdrant collections using Google embeddings
+- Use 'query_openai_rag' to retrieve relevant information from Qdrant collections using OpenAI embeddings
+- Use 'index_rag_collection' to create new knowledge bases by indexing directories of files
 
 IMPORTANT: You must make only ONE function call at a time. If a task requires multiple function calls, make them in sequence, waiting for each call to complete before making the next one.
 

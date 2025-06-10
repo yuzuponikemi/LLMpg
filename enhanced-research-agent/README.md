@@ -1,6 +1,6 @@
 # Enhanced Research Agent
 
-A powerful AI research assistant capable of web searches, webpage browsing, code execution, and file operations.
+A powerful AI research assistant capable of web searches, webpage browsing, code execution, file operations, and RAG (Retrieval-Augmented Generation) capabilities.
 
 ## Features
 
@@ -10,6 +10,10 @@ A powerful AI research assistant capable of web searches, webpage browsing, code
 - **File Operations**: Read and write files, list directory contents
 - **Advanced Planning**: Break complex queries into step-by-step plans
 - **Data Analysis**: Process, analyze, and visualize data from various sources
+- **RAG Capabilities**: Retrieve information from vector databases using semantic search
+  - Create searchable knowledge bases from documents and code
+  - Query collections using Google or OpenAI embeddings
+  - Custom embedding models for different document types
 
 ## Project Structure
 
@@ -48,6 +52,16 @@ enhanced-research-agent/
 4. Set up environment variables:
    - Create a `.env` file in the project root
    - Add your Google API key: `GOOGLE_API_KEY=your-api-key`
+   - Optionally add your OpenAI API key for OpenAI embeddings: `OPENAI_API_KEY=your-api-key`
+
+5. Set up Qdrant (for RAG capabilities):
+   - Using Docker:
+     ```
+     docker run -p 6333:6333 -p 6334:6334 \
+       -v $(pwd)/qdrant_data:/qdrant/storage \
+       qdrant/qdrant
+     ```
+   - Or download from the [Qdrant website](https://qdrant.tech/documentation/quick-start/)
 
 ## Usage
 
